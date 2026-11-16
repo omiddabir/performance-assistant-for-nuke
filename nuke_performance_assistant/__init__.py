@@ -1,5 +1,5 @@
 """Nuke Performance Assistant. No hardware scans or preference writes on import."""
-__version__ = '0.5.2-preview'
+__version__ = '0.6.0-preview'
 from .environment import env_value, env_has
 
 

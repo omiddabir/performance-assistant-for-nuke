@@ -96,7 +96,7 @@ class QtPanelTests(unittest.TestCase):
             self.panel._export()
         dialog.setAcceptMode.assert_called_once_with(cls.AcceptSave)
         dialog.setDefaultSuffix.assert_called_once_with('json')
-        self.assertEqual(json.loads(target.read_text())['tool'], '0.5.2-preview')
+        self.assertEqual(json.loads(target.read_text())['tool'], '0.6.0-preview')
         self.assertFalse(self.panel.control.store.native.exists())
 
     def test_diagnostic_cancel_does_not_write(self):
@@ -229,3 +229,31 @@ class QtPanelTests(unittest.TestCase):
             self.panel._auto()
         self.assertEqual(self.panel.fields['threads'].value(),6)
         self.assertIn('Free some space',self.panel.status.text())
+
+    def test_final_export_is_redacted(self):
+        import json,re
+        from pathlib import Path
+        from unittest.mock import MagicMock
+        target=Path(self.tmp.name)/'private-test.json'
+        self.panel.hardware['gpus']=[{'name':'GPU','uuid':'secret','vram_gb':16}]
+        self.panel.last_reasons={'nested':['Synthetic User','Render-Station','/home/Synthetic User/studio']}
+        dialog=MagicMock(); dialog.exec_.return_value=self.ui.QtWidgets.QDialog.Accepted
+        dialog.selectedFiles.return_value=[str(target)]
+        cls=self.ui.QtWidgets.QFileDialog
+        with patch.object(self.ui.QtWidgets,'QFileDialog',return_value=dialog) as factory, patch('nuke_performance_assistant.privacy.identities',return_value=[('Synthetic User','<user>'),('Render-Station','<computer>')]):
+            factory.AcceptSave,factory.AnyFile=cls.AcceptSave,cls.AnyFile
+            self.panel._export()
+        result=json.loads(target.read_text())
+        self.assertEqual(result['privacy']['level'],'redacted')
+        self.assertNotIn('preference_schema',result)
+        self.assertNotIn('uuid',result['hardware']['gpus'][0])
+        def walk(value):
+            if isinstance(value,dict):
+                for item in value.values(): walk(item)
+            elif isinstance(value,list):
+                for item in value: walk(item)
+            elif isinstance(value,str):
+                self.assertNotIn('Synthetic User',value)
+                self.assertNotIn('Render-Station',value)
+                self.assertFalse(re.search(r'(?:[A-Za-z]:[\\/]|/(?:home|Users|tmp|workspace)/)[^<>]+',value),value)
+        walk(result)

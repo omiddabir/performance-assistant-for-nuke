@@ -21,4 +21,4 @@ if backup.exists():
     raise RuntimeError('Backup already exists; retry later.')
 atomic_write(backup, file.read_bytes())
 atomic_write(file, updated.encode('utf-8'))
-nuke.message('Installation hook removed. Restart Nuke.\nSaved native preferences and backups remain.\nUse Restore Previous Settings before uninstalling if you want to revert changes.')
+nuke.message('Performance Assistant 0.6.0-preview installation hook removed. Restart Nuke.\nSaved native preferences and backups remain.\nUse Restore Previous Settings before uninstalling if you want to revert changes.')

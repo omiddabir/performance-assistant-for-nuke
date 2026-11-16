@@ -19,7 +19,7 @@ from .presentation import format_value, change_summary, equivalent
 class AssistantPanel(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super(AssistantPanel, self).__init__(parent)
-        self.setWindowTitle('Performance Assistant 0.5.2 — Preview')
+        self.setWindowTitle('Performance Assistant 0.6.0-preview')
         self.resize(860, 640)
         self.control = Controller(nuke)
         self.presets = Presets(self.control.store.folder)
@@ -493,7 +493,8 @@ class AssistantPanel(QtWidgets.QDialog):
             data = self.control.diagnostic()
             data.update(limits=ceilings(self._hw(), self._values()), hardware=self._hw(), staged=self._values(), preset=self.current_name,
                         reasoning=getattr(self, 'last_reasons', {}))
-            atomic_write(path, json_bytes(data))
+            from .privacy import redact_diagnostics
+            atomic_write(path, json_bytes(redact_diagnostics(data)))
             self.status.setText('Diagnostics saved locally.')
 
     def reject(self):

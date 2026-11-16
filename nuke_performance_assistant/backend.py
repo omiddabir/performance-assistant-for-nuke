@@ -191,7 +191,7 @@ class Controller:
 
     def diagnostic(self):
         from .frame_diagnostic import setting_candidates, playback_diagnostic
-        return {'tool': '0.5.2-preview', 'nuke': version_key(self.nuke),
+        return {'tool': '0.6.0-preview', 'nuke': version_key(self.nuke),
                 'mappings': {key: {'name': name, 'class': knob.Class(), 'label': knob.label()}
                              for key, (name, knob) in self.mapping.items()},
                 'unavailable': self.unavailable,

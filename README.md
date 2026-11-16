@@ -4,7 +4,7 @@
 
 Configure Nuke for the workstation you’re using. Performance Assistant reads your CPU, RAM, GPU memory and free cache space, then shows the proposed changes alongside Nuke’s current settings. Everything runs locally.
 
-**0.5.2 Preview** · Maintainer: Omid Dabirsiaghi · [Download the install ZIP](https://github.com/omiddabir/performance-assistant-for-nuke/raw/refs/heads/main/archives/Nuke_Performance_Assistant_v0.5.2_preview.zip)
+**0.6.0-preview** · Maintainer: Omid Dabirsiaghi · [Download the install ZIP](https://github.com/omiddabir/performance-assistant-for-nuke/raw/refs/heads/main/archives/Nuke_Performance_Assistant_v0.6.0_preview.zip)
 
 ## Install
 
@@ -30,6 +30,6 @@ To update an existing installation, close Nuke and replace the plugin folder. Yo
 
 ## Compatibility and feedback
 
-Target versions are Nuke 13–17. Windows checks include Nuke 15.1v2 and 17.1v1. Coverage varies by version and hardware. The independent timeline playback cache is configured in Nuke Preferences on builds without a verified mapping.
+The author tested UI launch and saving settings into Preferences on Windows with Nuke 15.1 and 17.1. All other versions are untested. Nuke 13 support is not claimed. No performance improvement is claimed. The independent timeline playback cache is configured in Nuke Preferences on builds without a verified mapping.
 
-For feedback, include your Nuke version, operating system, selected preset, and expected and observed values. Review local paths in diagnostics before sharing. See the [compatibility notes](docs/COMPATIBILITY.md) and [MIT license](LICENSE).
+For feedback, include your Nuke version, operating system, selected preset, and expected and observed values. Diagnostics redact user and computer names, identifying folder paths and GPU UUIDs, and omit the full Preferences list. Hardware models, OS, Nuke version and setting values remain included. See the [compatibility notes](docs/COMPATIBILITY.md) and [MIT license](LICENSE).
