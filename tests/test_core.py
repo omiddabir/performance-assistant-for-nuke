@@ -14,7 +14,7 @@ from nuke_performance_assistant.backend import Controller
 
 
 def hardware():
-    return {'logical_cpus': 16, 'ram_gb': 64, 'gpus': [
+    return {'logical_cpus': 16, 'ram_gb': 64, 'worker_ram_gb': 1., 'worker_ram_confirmed': True, 'gpus': [
         {'name': 'NVIDIA GeForce RTX 4070 Ti SUPER', 'vram_gb': 16}],
         'disk': {'free_gb': 400, 'total_gb': 1000}}
 
@@ -54,7 +54,7 @@ class FakeNuke:
     def __init__(self):
         self.env = {'threads': 16, 'gui': True}
         self.prefs = Prefs({'cache': Knob('comp cache size (%)', 50.),
-                            'worker': Knob('frame server processes to run*', 8, 'Int_Knob'),
+                            'worker': Knob('frame server processes to run*', 1, 'Int_Knob'),
                             'unrelated': Knob('autosave', 42)})
     def toNode(self, name): return self.prefs
     def tprint(self, text): pass
@@ -65,7 +65,7 @@ class PolicyTests(unittest.TestCase):
         v, why = recommendations(hardware(), current(), [current()['gpu']])
         self.assertLess(v['threads'], 16)
         self.assertLess(v['comp_pct'], 90)
-        self.assertNotIn('workers', v)
+        self.assertEqual(v['workers'], 1)
         self.assertTrue(all(why[k] for k in v))
         self.assertLessEqual(v['disk_gb'] + v['paint_disk_gb'], 150)
     def test_locked_fields_never_changed(self):
@@ -78,7 +78,7 @@ class PolicyTests(unittest.TestCase):
     def test_tiny_system(self):
         h = hardware(); h.update(logical_cpus=1, ram_gb=2)
         v, _ = recommendations(h, current(), [current()['gpu']])
-        self.assertEqual(v['threads'], 1); self.assertNotIn('comp_pct', v)
+        self.assertEqual(v, {}); self.assertIn('blocked', _)
     def test_multiple_gpus_not_guessed(self):
         c = current(); c['gpu'] = 'CPU'
         v, _ = recommendations(hardware(), c, ['CPU', 'GPU A', 'GPU B'])
@@ -178,7 +178,7 @@ class BackendTests(unittest.TestCase):
     def test_knob_failure_rolls_back(self):
         self.nuke.prefs._knobs['worker'].fail = True
         with self.assertRaises(RuntimeError):
-            self.control.apply({'comp_pct': 40, 'workers': 1}, hardware(), [], 'Shared', warnings_accepted=True)
+            self.control.apply({'comp_pct': 40, 'workers': 2}, hardware(), [], 'Shared', warnings_accepted=True)
         self.assertEqual(self.control.current()['comp_pct'], 50)
         self.assertFalse(self.control.store.native.exists())
     def test_clamp_caught(self):

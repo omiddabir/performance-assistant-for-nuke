@@ -26,6 +26,7 @@ class AssistantPanel(QtWidgets.QDialog):
         self.hardware = detect(self.control.cache_path())
         self.fields, self.current_labels, self.drafts = {}, {}, {}
         self.max_labels = {}
+        self.worker_drafts = {}
         self.busy, self.pending, self.closed = True, False, False
         self.current_name = self.presets.selected
         layout = QtWidgets.QVBoxLayout(self)
@@ -75,6 +76,7 @@ class AssistantPanel(QtWidgets.QDialog):
         self.auto_snapshot = None
         home_layout.addLayout(row)
         self.worker_ram = QtWidgets.QDoubleSpinBox(); self.worker_ram.setRange(.25, 65536)
+        self.worker_ram_confirmed = self.presets.confirmed.get(self.current_name, False)
         self.worker_ram.setValue(self.presets.planning.get(self.current_name, 8))
         self.worker_ram.setToolTip('Estimated peak RAM per worker, including nodes and caches. Replace 8 GiB with a measured peak.')
         self.review_title = QtWidgets.QLabel('Pending changes')
@@ -113,6 +115,11 @@ class AssistantPanel(QtWidgets.QDialog):
                 self._set_value(spec.key, current[spec.key])
             if group == 'Frame Server':
                 form.addRow('RAM per worker (GiB, estimate)', self.worker_ram)
+                self.worker_estimate_state = QtWidgets.QLabel()
+                form.addRow(self.worker_estimate_state)
+                hint = QtWidgets.QLabel('Render a representative shot with one worker. Monitor its peak RAM in Task Manager, then enter that peak with headroom.')
+                hint.setWordWrap(True)
+                form.addRow(hint)
                 note = QtWidgets.QLabel('Focus and export render limits: use Nuke Preferences.')
                 note.setWordWrap(True)
                 note.setToolTip('These mappings are not verified in this preview; they are left unchanged.')
@@ -139,10 +146,23 @@ class AssistantPanel(QtWidgets.QDialog):
         self.mode.currentTextChanged.connect(self._switch)
         self.busy = False
         for field in (self.worker_ram,):
-            field.valueChanged.connect(lambda value: self._refresh_review() if not self.busy else None)
+            field.valueChanged.connect(self._worker_edited)
+            field.lineEdit().textEdited.connect(self._worker_edited)
         self._refresh_review()
         if self.control.loaded_differences():
             self.status.setText('Loaded settings differ from the last save. Review before applying.')
+
+    def _worker_edited(self, value):
+        if self.busy: return
+        self.worker_ram_confirmed = True
+        self._refresh_review()
+
+    def _load_worker_estimate(self, name):
+        self.worker_ram.blockSignals(True)
+        peak, confirmed = self.worker_drafts.get(name, (self.presets.planning.get(name, 8), self.presets.confirmed.get(name, False)))
+        self.worker_ram.setValue(peak)
+        self.worker_ram.blockSignals(False)
+        self.worker_ram_confirmed = confirmed
 
     def _button(self, text, tip, action):
         button = QtWidgets.QPushButton(text)
@@ -237,6 +257,7 @@ class AssistantPanel(QtWidgets.QDialog):
     def _hw(self):
         hw = copy.deepcopy(self.hardware)
         hw['worker_ram_gb'] = self.worker_ram.value()
+        hw['worker_ram_confirmed'] = self.worker_ram_confirmed
         hw['disk'] = disk_info(self.control.cache_path(self._values().get('cache_path')))
         return hw
 
@@ -244,9 +265,12 @@ class AssistantPanel(QtWidgets.QDialog):
         values = self._values()
         hw = self._hw()
         limits = ceilings(hw, values)
+        self.worker_estimate_state.setText('User-confirmed estimate' if self.worker_ram_confirmed else 'Unconfirmed estimate — one worker maximum')
         for key, label in self.max_labels.items():
             maximum, reason = limits[key]
             label.setText(('Est. max: ' if key == 'workers' else ('Max: ' if key == 'threads' else 'Budget max: ')) + (format_value(maximum) if maximum is not None else '?'))
+            if key == 'workers' and not self.worker_ram_confirmed:
+                label.setText('unconfirmed estimate: ' + format_value(maximum))
             if key in ('disk_gb', 'paint_disk_gb') and maximum is not None:
                 combined = values.get('disk_gb', 0) + values.get('paint_disk_gb', 0)
                 label.setText('Both caches: {:g} / {:g} GB'.format(combined, maximum))
@@ -263,8 +287,8 @@ class AssistantPanel(QtWidgets.QDialog):
         text = change_summary(self.control.current(), values)
         if errors: text += '\n\n' + '\n'.join(errors)
         self.review.setPlainText(text)
-        self.review_title.setText('Pending changes ({}){}'.format(len(changed), ' — review budget warnings' if errors else ''))
-        self.apply_button.setEnabled(bool(changed))
+        self.review_title.setText('Pending changes ({}){}'.format(len(changed), ' — blocked: review limits' if errors else ''))
+        self.apply_button.setEnabled(bool(changed) and not errors)
         self.rename_action.setEnabled(self.current_name not in NAMES)
         self.delete_action.setEnabled(self.current_name not in NAMES)
         free = hw.get('disk', {}).get('free_gb')
@@ -281,14 +305,16 @@ class AssistantPanel(QtWidgets.QDialog):
     def _switch(self, name):
         if self.busy: return
         self.drafts[self.current_name] = self._values()
+        self.worker_drafts[self.current_name] = (self.worker_ram.value(), self.worker_ram_confirmed)
         self.auto_snapshot = None; self.undo_auto.setEnabled(False)
         try:
+            self._load_worker_estimate(name)
             values = self.drafts.get(name)
             if values is None:
                 values = self.presets.load(name, self.control.current(), self._hw(), self.control.devices())
             self._put(values)
             self.current_name = name
-            self.worker_ram.setValue(self.presets.planning.get(name, 8))
+            self._load_worker_estimate(name)
             self._refresh_vram()
             self._refresh_review()
             self.status.setText(name + ' loaded; not applied.')
@@ -307,6 +333,11 @@ class AssistantPanel(QtWidgets.QDialog):
                 if key in native and key in inputs:
                     inputs[key] = max(native[key], inputs[key])
         values, reasons = recommendations(self._hw(), inputs, self.control.devices(), self.current_name)
+        if 'blocked' in reasons:
+            self.last_reasons = reasons
+            self._refresh_review()
+            self.status.setText(reasons['blocked'])
+            return
         old_gpu = self._values().get('gpu')
         self._put(values)
         if self._values().get('gpu') != old_gpu: self._refresh_vram()
@@ -326,7 +357,7 @@ class AssistantPanel(QtWidgets.QDialog):
         errors, warnings = self.control.check(changed, self._hw())
         if errors: raise ValueError('\n'.join(errors))
         if warnings and not nuke.ask('\n'.join(warnings) + '\nSave preset anyway?'): return
-        self.presets.save(self.current_name, values, worker_ram_gb=self.worker_ram.value())
+        self.presets.save(self.current_name, values, worker_ram_gb=self.worker_ram.value(), worker_ram_confirmed=self.worker_ram_confirmed)
         self.drafts[self.current_name] = dict(values)
         self.status.setText(self.current_name + ' saved. Nuke settings unchanged.')
 
@@ -344,7 +375,7 @@ class AssistantPanel(QtWidgets.QDialog):
         name = name.strip()
         if name in self.presets.names(): raise ValueError('A preset with this name already exists.')
         # Store a snapshot; no native write. Oversized values remain reviewable on load.
-        self.presets.save(name, self._values(), worker_ram_gb=self.worker_ram.value())
+        self.presets.save(name, self._values(), worker_ram_gb=self.worker_ram.value(), worker_ram_confirmed=self.worker_ram_confirmed)
         self.drafts[self.current_name] = self._values()
         self._reload_names(name)
         self.status.setText(name + ' saved locally; not applied.')
@@ -357,6 +388,7 @@ class AssistantPanel(QtWidgets.QDialog):
         name = name.strip()
         self.presets.rename(old, name)
         self.drafts.pop(old, None)
+        self.worker_drafts.pop(old, None)
         self._reload_names(name)
         self.status.setText('Renamed; unsaved field edits still need Save preset.')
 
@@ -365,8 +397,9 @@ class AssistantPanel(QtWidgets.QDialog):
         if name in NAMES: raise ValueError('Built-in presets cannot be deleted.')
         if not nuke.ask('Delete preset "{}"?'.format(name)): return
         self.presets.delete(name); self.drafts.pop(name, None)
+        self.worker_drafts.pop(name, None)
         self._put(self.presets.load('Shared', self.control.current(), self._hw(), self.control.devices()))
-        self.worker_ram.setValue(self.presets.planning.get('Shared', 8))
+        self._load_worker_estimate('Shared')
         self._reload_names('Shared')
         self.status.setText('Preset deleted; Nuke settings unchanged.')
 

@@ -9,7 +9,7 @@ from .hardware import disk_info
 from .policy import validate
 from .presentation import equivalent
 from .frame_settings import discover_worker, FrameTransaction
-from .limits import check_limits
+from .limits import check_limits, RAM_GROUP
 
 
 def user_directory():
@@ -121,8 +121,9 @@ class Controller:
         path = self.cache_path(proposed.get('cache_path'))
         effective_hw['disk'] = disk_info(path)
         errors, warnings = validate(proposed, now, effective_hw, self.devices())
-        if not errors and not restoring:
-            errors.extend(check_limits(proposed, now, effective_hw))
+        if not errors:
+            checked = {k: v for k, v in proposed.items() if k in RAM_GROUP} if restoring else proposed
+            errors.extend(check_limits(checked, now, effective_hw))
         if 'disk_gb' in proposed and os.environ.get('NUKE_DISK_CACHE_GB'):
             errors.append('NUKE_DISK_CACHE_GB controls the disk cache size in this session.')
         if 'cache_path' in proposed:

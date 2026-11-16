@@ -84,19 +84,41 @@ def recommendations(hw, current, devices, mode='Shared', locks=()):
                 put('disk_gb', int(remaining) - paint, 'Joint allowance after free-space reserve.')
             elif len(keys) == 1:
                 put(keys[0], int(remaining), 'Remaining joint cache allowance.')
-    if 'workers' in current and 'workers' not in locks and hw.get('worker_ram_gb') and hw.get('ram_gb'):
-        from .limits import ceilings
-        cap = ceilings(hw, dict(current, **values))['workers'][0]
-        # CPU and RAM planning allowance. GPU peak is unknown: use one worker
-        # until the user opts into more after measuring a representative shot.
-        gpu_active = normalized(selected or '') not in ('', 'cpu', 'usecpu', 'none')
-        count = 1 if gpu_active else min(int(cap), max(1, threads // 4))
-        if focused and current.get('frame_server') and gpu_active:
-            count = min(int(cap), current['workers'])
-            if cap >= 1:
-                put('workers', count, 'Retain configured GPU workers within the estimated RAM ceiling; verify VRAM on the shot.')
-        elif cap >= 1: put('workers', max(1, count), 'Estimated RAM budget; GPU renders start with one worker to avoid VRAM duplication.' if gpu_active else 'CPU/RAM starting budget; measure peak memory per worker.')
-    # Frame Server enablement and timeout are deliberate workflow choices.
+    from .limits import ram_budget, ceilings, disk_budget, check_limits
+    planned = dict(current, **values)
+    if 'workers' in current and 'workers' not in locks:
+        confirmed = hw.get('worker_ram_confirmed') is True
+        # Start with one; additional workers need a confirmed peak and leftover RAM.
+        count = 1
+        if confirmed and ram and ram > 0:
+            gpu_active = normalized(selected or '') not in ('', 'cpu', 'usecpu', 'none')
+            desired = current['workers'] if focused and gpu_active and current.get('frame_server') else (1 if gpu_active else max(1, threads // 4))
+            minimum = dict(planned, comp_pct=BY_KEY['comp_pct'].low, workers=1)
+            count = max(1, min(desired, int(ceilings(hw, minimum)['workers'][0])))
+        planned['workers'] = count
+        put('workers', count, 'One worker until a representative peak is confirmed.' if not confirmed else 'Shared RAM budget.')
+    ledger = ram_budget(hw, planned)
+    if ledger['known'] and 'comp_pct' in current and 'comp_pct' not in locks:
+        cap = ceilings(hw, planned)['comp_pct'][0]
+        if cap >= BY_KEY['comp_pct'].low:
+            put('comp_pct', min(planned['comp_pct'], math.floor(cap * 100) / 100), 'Shared RAM budget including all configured workers.')
+            planned.update(values)
+    # Never leave oversized current disk limits in an apparently successful Auto result.
+    budget = disk_budget(hw)
+    if budget is not None:
+        keys = [k for k in ('disk_gb', 'paint_disk_gb') if k in current and k not in locks]
+        fixed = sum(planned.get(k, 0) for k in ('disk_gb', 'paint_disk_gb') if k not in keys)
+        remaining = max(0., budget-fixed)
+        if keys and remaining >= len(keys):
+            if sum(planned[k] for k in keys) > remaining:
+                for key in keys:
+                    put(key, math.floor(remaining / len(keys) * 100) / 100, 'Shared disk allowance after reserve.')
+        planned.update(values)
+    # Locks and unsupported minimum ranges can make a feasible proposal impossible.
+    # Return no changes, with an explicit blocked reason; never claim success.
+    errors = check_limits(planned, current, hw)
+    if errors:
+        return {}, {'blocked': 'Auto configure cannot produce a safe proposal. ' + ' '.join(errors)}
     return values, reasons
 
 

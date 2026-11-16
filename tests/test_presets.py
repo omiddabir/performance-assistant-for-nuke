@@ -65,6 +65,7 @@ class BudgetTests(unittest.TestCase):
             total = values.get('disk_gb', 0) + values.get('paint_disk_gb', 0)
             self.assertLessEqual(total, max(0, free - 100) * .8)
     def test_unknown_worker_cost_does_not_guess_process_count(self):
-        self.assertNotIn('workers', recommendations(hardware(), current(), [], 'Comp focused')[0])
+        h = hardware(); h.pop('worker_ram_confirmed'); h.pop('worker_ram_gb')
+        self.assertEqual(recommendations(h, current(), [], 'Comp focused')[0]['workers'], 1)
     def test_user_auto_is_noop(self):
         self.assertEqual(recommendations(hardware(), current(), [], 'User preset')[0], {})

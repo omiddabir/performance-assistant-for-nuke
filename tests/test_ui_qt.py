@@ -162,3 +162,47 @@ class QtPanelTests(unittest.TestCase):
         self.panel._refresh_hardware()
         self.assertEqual(gpu_vram('GPU A',self.panel._hw()),15.9921875)
         self.assertIsNone(gpu_vram('GPU B',self.panel._hw()))
+
+    def test_worker_confirmation_requires_edit_and_survives_save(self):
+        from nuke_performance_assistant.presets import Presets
+        self.assertFalse(self.panel.worker_ram_confirmed)
+        label=self.panel.max_labels['workers']
+        self.assertIn('unconfirmed estimate',label.text())
+        self.assertNotIn('Budget max',label.text())
+        self.panel._auto()
+        self.assertFalse(self.panel.worker_ram_confirmed)
+        with patch.object(self.ui, 'detect', return_value=dict(self.panel.hardware)):
+            self.panel._scan()
+        self.assertFalse(self.panel.worker_ram_confirmed)
+        self.panel.worker_ram.setValue(9)
+        self.assertTrue(self.panel.worker_ram_confirmed)
+        self.assertNotIn('unconfirmed',label.text())
+        self.panel._save_preset()
+        self.assertTrue(Presets(self.panel.control.store.folder).confirmed['Shared'])
+
+    def test_switch_cannot_confirm_default_or_borrow_another_profile(self):
+        self.panel.worker_ram.setValue(10)
+        self.panel.mode.setCurrentText('Comp focused')
+        self.assertFalse(self.panel.worker_ram_confirmed)
+        self.assertEqual(self.panel.worker_ram.value(),8)
+        self.panel.mode.setCurrentText('Shared')
+        self.assertTrue(self.panel.worker_ram_confirmed)
+        self.assertEqual(self.panel.worker_ram.value(),10)
+
+    def test_ram_violation_disables_apply_and_ok_cannot_bypass(self):
+        self.panel.hardware['ram_gb']=128
+        self.panel.worker_ram.setValue(9)
+        self.panel._put({'comp_pct':75,'workers':8})
+        self.panel._refresh_review()
+        self.assertFalse(self.panel.apply_button.isEnabled())
+        self.assertIn('Combined RAM',self.panel.review.toPlainText())
+        self.panel._apply(close=True); self.drain()
+        self.assertFalse(self.panel.control.store.native.exists())
+        self.assertIn('Combined RAM',self.messages[-1])
+
+
+    def test_explicitly_retyping_default_can_confirm_it(self):
+        self.assertFalse(self.panel.worker_ram_confirmed)
+        self.panel.worker_ram.lineEdit().textEdited.emit('8.00')
+        self.assertTrue(self.panel.worker_ram_confirmed)
+        self.assertEqual(self.panel.worker_ram.value(),8)

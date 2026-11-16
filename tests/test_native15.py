@@ -72,6 +72,9 @@ class Native15SaveTests(unittest.TestCase):
             nuke.NUKE_VERSION_MAJOR, nuke.NUKE_VERSION_MINOR = 15, 1
             nuke.NUKE_VERSION_RELEASE = 2
             nuke.prefs = fixture()
+            # A reversible transaction needs a safe starting RAM budget.
+            # Unsafe historical restores are covered by the coupled RAM regression.
+            nuke.prefs._knobs['CacheLimit'].setValue(50)
             control = Controller(nuke)
             before = control.current()
             proposed = {'threads': 12, 'comp_pct': 42, 'texture_mb': 982,
