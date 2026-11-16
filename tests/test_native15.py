@@ -72,21 +72,25 @@ class Native15SaveTests(unittest.TestCase):
             nuke.NUKE_VERSION_MAJOR, nuke.NUKE_VERSION_MINOR = 15, 1
             nuke.NUKE_VERSION_RELEASE = 2
             nuke.prefs = fixture()
-            # A reversible transaction needs a safe starting RAM budget.
-            # Unsafe historical restores are covered by the coupled RAM regression.
-            nuke.prefs._knobs['CacheLimit'].setValue(50)
+            h = hardware(); h['ram_gb'] = 128
             control = Controller(nuke)
             before = control.current()
             proposed = {'threads': 12, 'comp_pct': 42, 'texture_mb': 982,
                         'blink_pct': 25, 'paint_pct': 50, 'disk_gb': 30,
                         'paint_disk_gb': 10}
             with patch('nuke_performance_assistant.backend.disk_info', return_value={'free_gb': 174.2}):
-                control.apply(proposed, hardware(), ['texture_mb'], 'Shared', warnings_accepted=True)
+                control.apply(proposed, h, ['texture_mb'], 'Shared', warnings_accepted=True)
                 fresh = Controller(nuke)
                 self.assertEqual(fresh.state['locks'], ['texture_mb'])
                 for key, value in proposed.items():
                     self.assertEqual(fresh.current()[key], value)
                 self.assertEqual(nuke.prefs._knobs['selectedGPUDeviceNum'].value(), 0)
                 self.assertEqual(nuke.prefs._knobs['TimelineDiskCacheLimit'].value(), 10)
-                fresh.apply(fresh.state['previous'], hardware(), [], 'Shared', warnings_accepted=True, restoring=True)
+                errors, warnings = fresh.check(fresh.state['previous'], h, restoring=True)
+                self.assertFalse(errors)
+                self.assertTrue(any('147.20 GiB requested / 128.00 GiB available' in w for w in warnings))
+                with self.assertRaisesRegex(ValueError, 'Review warnings before applying'):
+                    fresh.apply(fresh.state['previous'], h, [], 'Shared', restoring=True)
+                self.assertEqual(fresh.current()['comp_pct'], 42)
+                fresh.apply(fresh.state['previous'], h, [], 'Shared', warnings_accepted=True, restoring=True)
                 self.assertEqual(fresh.current(), before)

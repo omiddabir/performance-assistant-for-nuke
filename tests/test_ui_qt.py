@@ -206,3 +206,26 @@ class QtPanelTests(unittest.TestCase):
         self.panel.worker_ram.lineEdit().textEdited.emit('8.00')
         self.assertTrue(self.panel.worker_ram_confirmed)
         self.assertEqual(self.panel.worker_ram.value(),8)
+
+    def test_restore_over_limit_uses_existing_confirmation_flow(self):
+        self.panel.hardware['ram_gb']=128
+        self.nuke.prefs._knobs['cache'].setValue(90)
+        self.panel.control=self.ui.Controller(self.nuke)
+        self.panel._put(dict(self.panel.control.current(),comp_pct=40))
+        self.panel._apply(); self.drain()
+        self.assertEqual(self.panel.control.current()['comp_pct'],40)
+        prompts=[]
+        self.nuke.ask=lambda text: prompts.append(text) or False
+        self.panel._restore(); self.drain()
+        self.assertEqual(self.panel.control.current()['comp_pct'],40)
+        self.assertIn('Combined RAM',prompts[-1])
+        self.assertIn('128.00',prompts[-1])
+        self.nuke.ask=lambda text: prompts.append(text) or True
+        self.panel._restore(); self.drain()
+        self.assertEqual(self.panel.control.current()['comp_pct'],90)
+
+    def test_auto_partial_block_status_keeps_good_fields(self):
+        with patch.object(self.ui,'recommendations',return_value=({'threads':6},{'blocked_groups':{'disk':'Free some space or move the cache folder.'}})):
+            self.panel._auto()
+        self.assertEqual(self.panel.fields['threads'].value(),6)
+        self.assertIn('Free some space',self.panel.status.text())

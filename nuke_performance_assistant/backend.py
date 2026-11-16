@@ -123,7 +123,11 @@ class Controller:
         errors, warnings = validate(proposed, now, effective_hw, self.devices())
         if not errors:
             checked = {k: v for k, v in proposed.items() if k in RAM_GROUP} if restoring else proposed
-            errors.extend(check_limits(checked, now, effective_hw))
+            limit_messages = check_limits(checked, now, effective_hw)
+            if restoring:
+                warnings.extend(limit_messages)
+            else:
+                errors.extend(limit_messages)
         if 'disk_gb' in proposed and os.environ.get('NUKE_DISK_CACHE_GB'):
             errors.append('NUKE_DISK_CACHE_GB controls the disk cache size in this session.')
         if 'cache_path' in proposed:

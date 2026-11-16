@@ -12,6 +12,14 @@ from pathlib import Path
 GIB = 1024 ** 3
 
 
+def usable_cpus():
+    """Logical CPUs available to this process, including OS affinity restrictions."""
+    count = os.cpu_count() or 1
+    if hasattr(os, 'sched_getaffinity'):
+        count = min(count, len(os.sched_getaffinity(0)))
+    return max(1, count)
+
+
 def command(args):
     try:
         opts = {'creationflags': 0x08000000} if os.name == 'nt' else {}
@@ -47,10 +55,8 @@ def parse_nvidia(text):
 
 def detect(cache_path):
     out = {'os': platform.system(), 'cpu': platform.processor() or 'Unknown',
-           'logical_cpus': os.cpu_count() or 1, 'physical_cores': None,
+           'logical_cpus': usable_cpus(), 'physical_cores': None,
            'ram_gb': None, 'available_gb': None, 'gpus': [], 'warnings': []}
-    if hasattr(os, 'sched_getaffinity'):
-        out['logical_cpus'] = min(out['logical_cpus'], len(os.sched_getaffinity(0)))
     try:
         if out['os'] == 'Windows':
             class MemoryStatus(ctypes.Structure):

@@ -342,7 +342,8 @@ class AssistantPanel(QtWidgets.QDialog):
         self._put(values)
         if self._values().get('gpu') != old_gpu: self._refresh_vram()
         self.last_reasons = reasons
-        self.status.setText('Recalculated; not applied or saved to preset.')
+        self.status.setText('Recalculated; not applied or saved to preset.' +
+                            (' ' + ' '.join(reasons['blocked_groups'].values()) if reasons.get('blocked_groups') else ''))
         self._refresh_review()
 
     def _undo_auto(self):

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 from test_core import hardware, current, FakeNuke
 from nuke_performance_assistant.limits import ceilings, check_limits, ram_budget
-from nuke_performance_assistant.policy import recommendations
+from nuke_performance_assistant.policy import recommendations, PROPOSAL_GROUPS
 from nuke_performance_assistant.presets import Presets
 from nuke_performance_assistant.backend import Controller
 
@@ -48,12 +48,20 @@ class CoupledRamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch.dict('os.environ',{'NPA_NUKE_DIR':folder}):
             n=FakeNuke(); control=Controller(n)
             h=hardware(); h.update(ram_gb=128,worker_ram_gb=8,worker_ram_confirmed=True)
-            for restore in (False,True):
-                with self.assertRaisesRegex(ValueError,'Combined RAM'):
-                    control.apply({'comp_pct':75,'workers':8},h,[],'Comp focused',
-                                  warnings_accepted=True,restoring=restore)
-                self.assertEqual(control.current()['workers'],1)
-                self.assertFalse(control.store.native.exists())
+            previous={'comp_pct':75,'workers':8}
+            with self.assertRaisesRegex(ValueError,'Combined RAM'):
+                control.apply(previous,h,[],'Comp focused',warnings_accepted=True)
+            self.assertEqual(control.current()['workers'],1)
+            self.assertFalse(control.store.native.exists())
+            errors,warnings=control.check(previous,h,restoring=True)
+            self.assertFalse(errors)
+            self.assertTrue(any('192.00 GiB requested / 128.00 GiB available' in w for w in warnings))
+            with self.assertRaisesRegex(ValueError,'Review warnings before applying'):
+                control.apply(previous,h,[],'Comp focused',restoring=True)
+            self.assertFalse(control.store.native.exists())
+            control.apply(previous,h,[],'Comp focused',warnings_accepted=True,restoring=True)
+            self.assertEqual(control.current()['workers'],8)
+            self.assertEqual(control.current()['comp_pct'],75)
 
     def test_saved_default_is_not_confirmation_and_roundtrip(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -71,43 +79,83 @@ class CoupledRamTests(unittest.TestCase):
             self.assertFalse(Presets(folder).confirmed.get('Legacy',False))
 
     def test_tiny_ram_and_disk_fail_closed(self):
-        for ram,free in ((8,400),(64,5)):
+        for ram,free,group in ((8,400,'ram'),(64,5,'disk')):
             h=hardware(); h.update(ram_gb=ram,worker_ram_gb=8,worker_ram_confirmed=False)
             h['disk']['free_gb']=free
-            v,why=recommendations(h,current(),[current()['gpu']],'Comp focused')
-            self.assertEqual(v,{})
-            self.assertIn('blocked',why)
+            c=current(); v,why=recommendations(h,c,[c['gpu']],'Comp focused')
+            self.assertIn(group,why['blocked_groups'])
+            self.assertNotIn('blocked',why)
+            self.assertIn('threads',v)
+            for key in PROPOSAL_GROUPS[group]:
+                self.assertNotIn(key,v)
+                if key in c: self.assertEqual(dict(c,**v)[key],c[key])
+
+    def test_low_disk_does_not_block_other_groups(self):
+        for ram in (128,256,1024):
+            for free in (0,1,5):
+                h=hardware(); h.update(ram_gb=ram,worker_ram_gb=8,worker_ram_confirmed=False)
+                h['disk']['free_gb']=free
+                for mode in ('Shared','Comp focused'):
+                    c=current(); v,why=recommendations(h,c,[c['gpu']],mode)
+                    self.assertEqual(set(why['blocked_groups']),{'disk'})
+                    self.assertNotIn('blocked',why)
+                    for key in ('threads','comp_pct','workers','texture_mb','blink_pct'):
+                        self.assertIn(key,v)
+                    self.assertFalse(check_limits(v,c,h))
+                    merged=dict(c,**v)
+                    self.assertLessEqual(ram_budget(h,merged)['used'],ram)
+                    self.assertLessEqual(merged['texture_mb']/1024+16*merged['blink_pct']/100,16*.8)
+                    self.assertEqual(merged['disk_gb'],c['disk_gb'])
+
+    def test_gpu_group_failure_preserves_other_groups(self):
+        h=hardware(); h['gpus'][0]['vram_gb']=4
+        c=current(); c['texture_mb']=100000
+        v,why=recommendations(h,c,[c['gpu']],locks=('texture_mb',))
+        self.assertIn('gpu',why['blocked_groups'])
+        self.assertIn('comp_pct',v); self.assertIn('disk_gb',v)
+        self.assertTrue(all(k not in v for k in PROPOSAL_GROUPS['gpu']))
 
 
 class InvariantSweepTests(unittest.TestCase):
-    def assert_safe(self,h,c,v):
-        # Independent arithmetic oracle, not an assertion against the production helper.
+    def assert_safe(self,h,c,proposal,blocked):
+        v=dict(c,**proposal)
+        for group,keys in PROPOSAL_GROUPS.items():
+            if group in blocked:
+                self.assertTrue(blocked[group])
+                for key in keys:
+                    self.assertNotIn(key,proposal)
+                    if key in c: self.assertEqual(v[key],c[key])
+        # Independent arithmetic oracle for each proposed group.
         ram=h['ram_gb']; peak=h['worker_ram_gb']
-        used=max(4.,ram*.1)+max(4.,ram*.1)+ram*(v['comp_pct']+v['timeline_pct'])/100.+v['workers']*peak
-        self.assertLessEqual(used,ram+1e-8)
+        if 'ram' not in blocked:
+            used=max(4.,ram*.1)+max(4.,ram*.1)+ram*(v['comp_pct']+v['timeline_pct'])/100.+v['workers']*peak
+            self.assertLessEqual(used,ram+1e-8)
+            if not h['worker_ram_confirmed']: self.assertLessEqual(v['workers'],1)
         vram=h['gpus'][0]['vram_gb']
-        if vram is not None:
+        if 'gpu' not in blocked and vram is not None:
             used_gpu=v['texture_mb']/1024.+(0 if v.get('blink_disabled') else vram*v['blink_pct']/100.)
             self.assertLessEqual(used_gpu,vram*.8+1e-8)
-        else:
-            for key in ('texture_mb','blink_pct'):
-                self.assertLessEqual(v[key],c[key])
-        disk=h['disk']; capacity=max(0.,disk['free_gb']-max(20.,disk['total_gb']*.1))*1024**3/1e9
-        self.assertLessEqual(v['disk_gb']+v['paint_disk_gb'],capacity+1e-8)
-        if not h['worker_ram_confirmed']:
-            self.assertLessEqual(v['workers'],1)
-        self.assertFalse(check_limits(v,c,h))
+        if 'disk' not in blocked:
+            disk=h['disk']; capacity=max(0.,disk['free_gb']-max(20.,disk['total_gb']*.1))*1024**3/1e9
+            self.assertLessEqual(v['disk_gb']+v['paint_disk_gb'],capacity+1e-8)
+        if 'cpu' not in blocked: self.assertLessEqual(v['threads'],h['logical_cpus'])
+        if 'shape' not in blocked:
+            for key in ('playback_pct','paint_pct'): self.assertTrue(0<=v[key]<=100)
+        self.assertFalse(check_limits(proposal,c,h))
 
     def test_full_capacity_sweep_presets_and_auto(self):
         rng=random.Random(20261115)
-        count=accepted=blocked=0
+        scenarios=set(); cases=set(); variants=0
+        blocked_cases={g:set() for g in ('ram','gpu','disk','all-groups')}
         with tempfile.TemporaryDirectory() as folder:
             presets=Presets(folder)
             for ram in range(8,1025):
                 for vram in [None]+list(range(4,49)):
+                    cpus=rng.randint(2,128)
+                    free_gb=(5.,4000.,rng.uniform(5,4000))[(ram+(vram or 0))%3]
+                    scenario=(ram,vram,cpus,free_gb)
+                    scenarios.add(scenario)
                     for confirmed in (False,True):
-                        cpus=rng.randint(2,128)
-                        free_gb=(5.,4000.,rng.uniform(5,4000))[(ram+(vram or 0))%3]
                         h=hardware(); h.update(ram_gb=ram,logical_cpus=cpus,
                             worker_ram_gb=(rng.choice((.5,2.,8.,16.,32.)) if confirmed else 8.),
                             worker_ram_confirmed=confirmed)
@@ -119,23 +167,55 @@ class InvariantSweepTests(unittest.TestCase):
                             blink_pct=rng.randint(1,100),disk_gb=rng.randint(1,2000),
                             paint_disk_gb=rng.randint(1,2000),frame_server=True)
                         for mode in ('Shared','Comp focused'):
+                            case=(scenario,mode); cases.add(case); variants+=1
                             proposal,why=recommendations(h,c,['GPU'],mode)
                             loaded=presets.load(mode,c,h,['GPU'])
-                            count+=2  # Auto and built-in preset loading entry points.
+                            self.assertEqual(loaded,dict(c,**proposal))
+                            blocked=why.get('blocked_groups',{})
+                            for group in ('ram','gpu','disk'):
+                                if group in blocked: blocked_cases[group].add(case)
                             if 'blocked' in why:
-                                blocked+=2
+                                blocked_cases['all-groups'].add(case)
                                 self.assertEqual(proposal,{})
                                 self.assertEqual(loaded,c)
-                                self.assertTrue(check_limits(c,c,h))
-                            else:
-                                accepted+=2
-                                merged=dict(c,**proposal)
-                                self.assertEqual(loaded,merged)
-                                self.assert_safe(h,c,merged)
-        self.assertEqual(count,374256)
-        self.assertGreater(accepted,100000)
-        self.assertGreater(blocked,0)
-        print('\nCAPACITY SWEEP seed=20261115 cases={} accepted={} blocked={}'.format(count,accepted,blocked),flush=True)
+                            self.assert_safe(h,c,proposal,blocked)
+        self.assertEqual(len(scenarios),46782)
+        self.assertEqual(len(cases),93564)
+        self.assertEqual(variants,187128)
+        for group in ('ram','gpu','disk'): self.assertGreater(len(blocked_cases[group]),0)
+        print('\nCAPACITY SWEEP seed=20261115 unique_hardware={} x presets=2 cases={} estimate_variants={} blocked={}'.format(
+            len(scenarios),len(cases),variants,{k:len(v) for k,v in blocked_cases.items()}),flush=True)
+
+    def test_restore_sweep(self):
+        rng=random.Random(51217); over=0
+        with tempfile.TemporaryDirectory() as folder, patch.dict('os.environ',{'NPA_NUKE_DIR':folder}):
+            for index in range(512):
+                h=hardware(); h.update(ram_gb=rng.randint(8,1024),logical_cpus=128,
+                                      worker_ram_gb=rng.choice((.5,2.,8.,32.)),worker_ram_confirmed=True)
+                n=FakeNuke()
+                n.prefs._knobs['cache'].setValue(rng.randint(1,90))
+                n.prefs._knobs['worker'].setValue(rng.randint(1,16))
+                control=Controller(n)
+                previous={'comp_pct':rng.randint(1,90),'workers':rng.randint(1,16)}
+                ram=h['ram_gb']
+                used=2*max(4.,ram*.1)+ram*(previous['comp_pct']+5)/100+previous['workers']*h['worker_ram_gb']
+                is_over=used>ram+1e-8
+                errors,warnings=control.check(previous,h,restoring=True)
+                self.assertFalse(errors)
+                ram_warnings=[w for w in warnings if w.startswith('Combined RAM budget')]
+                self.assertEqual(bool(ram_warnings),is_over)
+                if is_over:
+                    over+=1
+                    self.assertIn('{:.2f} GiB requested / {:.2f} GiB available'.format(used,ram),ram_warnings[0])
+                if warnings:
+                    before=control.current()
+                    with self.assertRaisesRegex(ValueError,'Review warnings before applying'):
+                        control.apply(previous,h,[],'Shared',restoring=True)
+                    self.assertEqual(control.current(),before)
+                control.apply(previous,h,[],'Shared',restoring=True,warnings_accepted=True)
+                for k,v in previous.items(): self.assertEqual(control.current()[k],v)
+        self.assertGreater(over,0); self.assertLess(over,512)
+        print('RESTORE SWEEP seed=51217 pairs=512 over_ram={} within_ram={}'.format(over,512-over),flush=True)
 
     def test_unknown_capacities_never_increase(self):
         rng=random.Random(71517); count=0
@@ -150,3 +230,23 @@ class InvariantSweepTests(unittest.TestCase):
                     self.assertLessEqual(changes.get(key,c[key]),c[key])
                 count+=1
         print('UNKNOWN CAPACITY SWEEP seed=71517 cases={}'.format(count),flush=True)
+
+
+class PartialApplyTests(unittest.TestCase):
+    def test_other_groups_apply_with_oversized_disk_values_untouched(self):
+        from test_native15 import fixture
+        with tempfile.TemporaryDirectory() as folder, patch.dict('os.environ',{'NPA_NUKE_DIR':folder}):
+            n=FakeNuke(); n.prefs=fixture(); control=Controller(n)
+            h=hardware(); h['ram_gb']=128; h['disk']['free_gb']=5
+            before=control.current()
+            changes,reasons=recommendations(h,before,[before['gpu']],'Shared')
+            self.assertEqual(set(reasons['blocked_groups']),{'disk'})
+            with patch('nuke_performance_assistant.backend.disk_info',return_value=h['disk']):
+                errors,warnings=control.check(changes,h)
+                self.assertFalse(errors)
+                control.apply(changes,h,[],'Shared',warnings_accepted=True)
+            self.assertEqual(control.current()['disk_gb'],before['disk_gb'])
+            self.assertEqual(control.current()['paint_disk_gb'],before['paint_disk_gb'])
+            self.assertEqual(control.current()['threads'],changes['threads'])
+            self.assertEqual(control.current()['comp_pct'],changes['comp_pct'])
+            self.assertEqual(control.current()['texture_mb'],changes['texture_mb'])

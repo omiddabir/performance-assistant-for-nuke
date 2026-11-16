@@ -24,9 +24,8 @@ def startup():
             nuke.tprint('Performance Assistant: interrupted save detected. Open the assistant for recovery.')
             return
         value = store.load().get('threads')
-        limit = os.cpu_count() or 1
-        if hasattr(os, 'sched_getaffinity'):
-            limit = min(limit, len(os.sched_getaffinity(0)))
+        from .hardware import usable_cpus
+        limit = usable_cpus()
         if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= limit and env_has(nuke, 'threads'):
             nuke.env['threads'] = value
     except Exception as exc:
