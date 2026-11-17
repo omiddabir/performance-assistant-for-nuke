@@ -9,7 +9,7 @@ from .hardware import disk_info
 from .policy import validate
 from .presentation import equivalent
 from .frame_settings import discover_worker, FrameTransaction
-from .limits import check_limits
+from .limits import check_limits, RAM_GROUP
 
 
 def user_directory():
@@ -121,8 +121,13 @@ class Controller:
         path = self.cache_path(proposed.get('cache_path'))
         effective_hw['disk'] = disk_info(path)
         errors, warnings = validate(proposed, now, effective_hw, self.devices())
-        if not errors and not restoring:
-            errors.extend(check_limits(proposed, now, effective_hw))
+        if not errors:
+            checked = {k: v for k, v in proposed.items() if k in RAM_GROUP} if restoring else proposed
+            limit_messages = check_limits(checked, now, effective_hw)
+            if restoring:
+                warnings.extend(limit_messages)
+            else:
+                errors.extend(limit_messages)
         if 'disk_gb' in proposed and os.environ.get('NUKE_DISK_CACHE_GB'):
             errors.append('NUKE_DISK_CACHE_GB controls the disk cache size in this session.')
         if 'cache_path' in proposed:
@@ -186,7 +191,7 @@ class Controller:
 
     def diagnostic(self):
         from .frame_diagnostic import setting_candidates, playback_diagnostic
-        return {'tool': '0.5.2-preview', 'nuke': version_key(self.nuke),
+        return {'tool': '0.6.0-preview', 'nuke': version_key(self.nuke),
                 'mappings': {key: {'name': name, 'class': knob.Class(), 'label': knob.label()}
                              for key, (name, knob) in self.mapping.items()},
                 'unavailable': self.unavailable,

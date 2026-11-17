@@ -36,9 +36,10 @@ class LimitsTests(unittest.TestCase):
         self.assertIsNone(ceilings(h,current())['texture_mb'][0])
     def test_worker_estimate_and_available_memory(self):
         h=hardware(); h.update(worker_ram_gb=8, available_gb=32)
-        self.assertEqual(ceilings(h,current())['workers'][0], 2)
+        c = current(); c.update(comp_pct=25, timeline_pct=5)
+        self.assertEqual(ceilings(h,c)['workers'][0], 4)
         h['available_gb']=0
-        self.assertEqual(ceilings(h,current())['workers'][0], 0)
+        self.assertEqual(ceilings(h,c)['workers'][0], 0)
     def test_worker_auto_gpu_conservative_cpu_scales(self):
         h=hardware(); h['worker_ram_gb']=8
         self.assertEqual(recommendations(h,current(),[current()['gpu']], 'Comp focused')[0]['workers'],1)

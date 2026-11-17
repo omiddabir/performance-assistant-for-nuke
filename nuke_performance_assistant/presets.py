@@ -40,6 +40,7 @@ class Presets:
         self.expected = fingerprint(self.path)
         self.profiles = {}
         self.planning = {}
+        self.confirmed = {}
         self.selected = 'Shared'
         if self.path.exists():
             data = json.loads(self.path.read_text(encoding='utf-8'))
@@ -49,6 +50,8 @@ class Presets:
             for name, value in data.get('worker_ram_gb', {}).items():
                 if name in self.profiles and isinstance(value, (int, float)) and .25 <= value <= 65536:
                     self.planning[name] = value
+            self.confirmed = {name: True for name, flag in data.get('worker_ram_confirmed', {}).items()
+                              if flag is True and name in self.planning}
             if data.get('selected') in self.names():
                 self.selected = data['selected']
 
@@ -72,17 +75,17 @@ class Presets:
             raise ValueError('Only custom presets can be renamed.')
         if not valid_name(new) or new in self.names():
             raise ValueError('Choose a new unique preset name.')
-        self._write(new, self.profiles[old], remove=old, worker_ram_gb=self.planning.get(old))
+        self._write(new, self.profiles[old], remove=old, worker_ram_gb=self.planning.get(old), worker_ram_confirmed=self.confirmed.get(old, False))
 
     def delete(self, name):
         if name in NAMES or name not in self.profiles:
             raise ValueError('Built-in presets cannot be deleted.')
         self._write('Shared', self.profiles.get('Shared', {}), remove=name, write_profile=False)
 
-    def save(self, name, values, worker_ram_gb=None):
-        self._write(name, values, worker_ram_gb=worker_ram_gb)
+    def save(self, name, values, worker_ram_gb=None, worker_ram_confirmed=False):
+        self._write(name, values, worker_ram_gb=worker_ram_gb, worker_ram_confirmed=worker_ram_confirmed)
 
-    def _write(self, name, values, remove=None, worker_ram_gb=None, write_profile=True):
+    def _write(self, name, values, remove=None, worker_ram_gb=None, write_profile=True, worker_ram_confirmed=False):
         if not valid_name(name):
             raise ValueError('Use a non-empty name of at most 80 characters.')
         values = clean_values(values)
@@ -101,6 +104,9 @@ class Presets:
                 raise RuntimeError('Presets changed in another window. Reopen the assistant.')
             profiles = copy.deepcopy(self.profiles)
             planning = dict(self.planning)
+            confirmed = dict(self.confirmed)
+            if remove is not None: confirmed.pop(remove, None)
+            if worker_ram_gb is not None: confirmed[name] = worker_ram_confirmed is True
             if remove is not None: planning.pop(remove, None)
             if worker_ram_gb is not None: planning[name] = worker_ram_gb
             if remove is not None: profiles.pop(remove, None)
@@ -109,8 +115,9 @@ class Presets:
             if write_profile: profiles[name] = merged
             if self.path.exists():
                 atomic_write(self.path.with_suffix('.json.bak'), self.path.read_bytes())
-            atomic_write(self.path, json_bytes({'schema': 1, 'selected': name, 'presets': profiles, 'worker_ram_gb': planning}))
+            atomic_write(self.path, json_bytes({'schema': 1, 'selected': name, 'presets': profiles, 'worker_ram_gb': planning, 'worker_ram_confirmed': confirmed}))
             self.profiles, self.selected, self.planning = profiles, name, planning
+            self.confirmed = confirmed
             self.expected = fingerprint(self.path)
         finally:
             self.lock.unlink()

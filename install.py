@@ -30,4 +30,4 @@ if path.exists():
         raise RuntimeError('Backup already exists; retry later.')
     module.atomic_write(backup, path.read_bytes())
 module.atomic_write(path, (old + block).encode('utf-8'))
-nuke.message('Installed. Keep the extracted folder in this location and restart Nuke.\nTools > Performance Assistant')
+nuke.message('Performance Assistant 0.6.0-preview installed. Keep the extracted folder in this location and restart Nuke.\nTools > Performance Assistant')

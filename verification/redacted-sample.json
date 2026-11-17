@@ -1,0 +1,138 @@
+{
+  "cache_environment": {},
+  "devices": [],
+  "frame_server_setting_candidates": [],
+  "hardware": {
+    "cpu": "Test CPU",
+    "disk": {
+      "free_gb": null,
+      "path": ".",
+      "total_gb": null
+    },
+    "gpus": [
+      {
+        "name": "GPU",
+        "vram_gb": 16
+      }
+    ],
+    "logical_cpus": 16,
+    "os": "Windows",
+    "physical_cores": 8,
+    "ram_gb": 64,
+    "warnings": [],
+    "worker_ram_confirmed": false,
+    "worker_ram_gb": 8.0
+  },
+  "limits": {
+    "blink_pct": [
+      null,
+      "Dedicated VRAM unknown; verify manually"
+    ],
+    "comp_pct": [
+      62.5,
+      "Shared RAM allowance after OS, processing, timeline and workers"
+    ],
+    "disk_gb": [
+      null,
+      "Disk capacity unknown"
+    ],
+    "frame_timeout": [
+      10.0,
+      "Normal Preferences slider range; timeout is not a hardware capacity"
+    ],
+    "paint_disk_gb": [
+      null,
+      "Disk capacity unknown"
+    ],
+    "paint_pct": [
+      100,
+      "Percentage/application planning range"
+    ],
+    "playback_pct": [
+      100,
+      "Percentage/application planning range"
+    ],
+    "texture_mb": [
+      null,
+      "Dedicated VRAM unknown; verify manually"
+    ],
+    "threads": [
+      16.0,
+      "Available logical CPUs"
+    ],
+    "timeline_pct": [
+      18.5,
+      "Shared RAM allowance after OS, processing, comp cache and workers"
+    ],
+    "workers": [
+      1.0,
+      "unconfirmed estimate; measure one worker before allowing more than one"
+    ]
+  },
+  "loaded_vs_saved_differences": {},
+  "mappings": {
+    "comp_pct": {
+      "class": "Double_Knob",
+      "label": "comp cache size (%)",
+      "name": "cache"
+    },
+    "workers": {
+      "class": "Int_Knob",
+      "label": "frame server processes to run*",
+      "name": "worker"
+    }
+  },
+  "native_preferences_file": "<home>/.nuke/preferences17.1.nk",
+  "nuke": "17.1",
+  "playback_mapping_evidence": {
+    "api": [],
+    "qt_numeric_cache_settings": [],
+    "source_keys": []
+  },
+  "preference_schema_count": 3,
+  "preset": "Shared",
+  "privacy": {
+    "level": "redacted",
+    "note": "Hardware model, OS, Nuke version and setting values are still included.",
+    "removed": [
+      "user name",
+      "computer name",
+      "GPU UUID",
+      "folder paths",
+      "full preference list"
+    ]
+  },
+  "reasoning": {
+    "nested": [
+      "<user>",
+      "<computer>",
+      "/<folder>"
+    ]
+  },
+  "saved_thread_limit": null,
+  "staged": {
+    "comp_pct": 49.0,
+    "threads": 12,
+    "workers": 1
+  },
+  "tool": "0.6.0-preview",
+  "unavailable": {
+    "blink_disabled": "Not mapped in this build; left unchanged.",
+    "blink_pct": "Not mapped in this build; left unchanged.",
+    "cache_path": "Not mapped in this build; left unchanged.",
+    "disk_gb": "Not mapped in this build; left unchanged.",
+    "frame_server": "Not mapped in this build; left unchanged.",
+    "frame_timeout": "Not mapped in this build; left unchanged.",
+    "gpu": "Not mapped in this build; left unchanged.",
+    "paint_disk_gb": "Not mapped in this build; left unchanged.",
+    "paint_pct": "Not mapped in this build; left unchanged.",
+    "playback_pct": "Not mapped in this build; left unchanged.",
+    "texture_mb": "Not mapped in this build; left unchanged.",
+    "timeline_pct": "Not mapped in this build; left unchanged."
+  },
+  "values": {
+    "comp_pct": 50.0,
+    "threads": 16,
+    "workers": 1
+  }
+}

@@ -22,7 +22,7 @@ class StartupTests(unittest.TestCase):
         Store(self.tmp.name, '17.1').commit(b'Preferences {}', {'schema': 1, 'threads': 2})
     def run_startup(self, argv=('Nuke',)):
         from nuke_performance_assistant import startup
-        with patch.object(sys, 'argv', list(argv)), patch('os.cpu_count', return_value=16):
+        with patch.object(sys, 'argv', list(argv)), patch('nuke_performance_assistant.hardware.usable_cpus', return_value=16):
             startup()
     def test_gui_restores_without_native_writes(self):
         path = Path(self.tmp.name) / 'preferences17.1.nk'; before = path.read_bytes()
@@ -44,3 +44,28 @@ class StartupTests(unittest.TestCase):
         self.run_startup(); self.assertEqual(self.nuke.env['threads'], 16)
 
 
+
+    def test_saved_threads_replace_nondefault_start(self):
+        self.nuke.env['threads'] = 7
+        self.run_startup()
+        self.assertEqual(self.nuke.env['threads'], 2)
+
+    def test_saved_threads_respect_single_allowed_cpu(self):
+        from nuke_performance_assistant import startup
+        self.nuke.env['threads'] = 1
+        with patch.object(sys, 'argv', ['Nuke']), patch('nuke_performance_assistant.hardware.usable_cpus', return_value=1):
+            startup()
+        self.assertEqual(self.nuke.env['threads'], 1)
+
+
+class UsableCpuTests(unittest.TestCase):
+    def test_cpu_count_and_affinity_minimum(self):
+        from nuke_performance_assistant.hardware import usable_cpus
+        for total, affinity, expected in ((16, {0}, 1), (2, {0,1,2,3}, 2), (None, {0}, 1)):
+            with patch('os.cpu_count', return_value=total), patch('os.sched_getaffinity', return_value=affinity, create=True):
+                self.assertEqual(usable_cpus(), expected)
+
+    def test_detection_uses_shared_helper(self):
+        from nuke_performance_assistant.hardware import detect
+        with patch('nuke_performance_assistant.hardware.usable_cpus', return_value=3), patch('platform.system', return_value='Test'), patch('shutil.which', return_value=None):
+            self.assertEqual(detect('/tmp')['logical_cpus'], 3)

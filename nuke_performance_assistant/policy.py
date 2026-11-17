@@ -3,6 +3,36 @@ import math
 from .specs import normalized, BY_KEY
 
 
+PROPOSAL_GROUPS = {
+    'cpu': ('threads',),
+    'ram': ('comp_pct', 'timeline_pct', 'workers', 'frame_server'),
+    'gpu': ('texture_mb', 'blink_pct', 'blink_disabled', 'gpu'),
+    'disk': ('disk_gb', 'paint_disk_gb', 'cache_path'),
+    'shape': ('playback_pct', 'paint_pct'),
+}
+
+
+def blocked_message(group, hw):
+    if group == 'disk':
+        disk = hw.get('disk', {})
+        free, total = disk.get('free_gb'), disk.get('total_gb')
+        if free is not None and total is not None:
+            scale = 1024 ** 3 / 1e9
+            reserve = max(20., total * .1)
+            if free < reserve:
+                return ('The cache drive has {:.2f} GB free, below the {:.2f} GB reserve. '
+                        'Free some space or move the cache folder.').format(free*scale, reserve*scale)
+            return ('The cache settings do not fit the remaining {:.2f} GB. '
+                    'Lower both disk caches or move the cache folder.').format(max(0.,free-reserve)*scale)
+        return 'The cache drive capacity is unknown. Choose an accessible cache folder and scan again.'
+    return {
+        'ram': 'The memory settings cannot be confirmed as safe. Lower the comp cache or use fewer workers; check the worker memory estimate.',
+        'gpu': 'The graphics memory settings cannot be confirmed as safe. Lower the texture and Blink caches or select a device with known memory.',
+        'cpu': 'The thread setting cannot be confirmed as safe. Scan the computer again and lower the thread count.',
+        'shape': 'The cache shares must be between 0 and 100 percent. Enter a percentage within that range.',
+    }[group]
+
+
 def gpu_vram(device, hardware):
     name = normalized(device)
     matches = [g for g in hardware.get('gpus', []) if normalized(g['name']) == name]
@@ -84,19 +114,66 @@ def recommendations(hw, current, devices, mode='Shared', locks=()):
                 put('disk_gb', int(remaining) - paint, 'Joint allowance after free-space reserve.')
             elif len(keys) == 1:
                 put(keys[0], int(remaining), 'Remaining joint cache allowance.')
-    if 'workers' in current and 'workers' not in locks and hw.get('worker_ram_gb') and hw.get('ram_gb'):
-        from .limits import ceilings
-        cap = ceilings(hw, dict(current, **values))['workers'][0]
-        # CPU and RAM planning allowance. GPU peak is unknown: use one worker
-        # until the user opts into more after measuring a representative shot.
-        gpu_active = normalized(selected or '') not in ('', 'cpu', 'usecpu', 'none')
-        count = 1 if gpu_active else min(int(cap), max(1, threads // 4))
-        if focused and current.get('frame_server') and gpu_active:
-            count = min(int(cap), current['workers'])
-            if cap >= 1:
-                put('workers', count, 'Retain configured GPU workers within the estimated RAM ceiling; verify VRAM on the shot.')
-        elif cap >= 1: put('workers', max(1, count), 'Estimated RAM budget; GPU renders start with one worker to avoid VRAM duplication.' if gpu_active else 'CPU/RAM starting budget; measure peak memory per worker.')
-    # Frame Server enablement and timeout are deliberate workflow choices.
+    from .limits import ram_budget, ceilings, disk_budget, check_limits
+    planned = dict(current, **values)
+    if 'workers' in current and 'workers' not in locks:
+        confirmed = hw.get('worker_ram_confirmed') is True
+        # Start with one; additional workers need a confirmed peak and leftover RAM.
+        count = 1
+        if confirmed and ram and ram > 0:
+            gpu_active = normalized(selected or '') not in ('', 'cpu', 'usecpu', 'none')
+            desired = current['workers'] if focused and gpu_active and current.get('frame_server') else (1 if gpu_active else max(1, threads // 4))
+            minimum = dict(planned, comp_pct=BY_KEY['comp_pct'].low, workers=1)
+            count = max(1, min(desired, int(ceilings(hw, minimum)['workers'][0])))
+        planned['workers'] = count
+        put('workers', count, 'One worker until a representative peak is confirmed.' if not confirmed else 'Shared RAM budget.')
+    ledger = ram_budget(hw, planned)
+    if ledger['known'] and 'comp_pct' in current and 'comp_pct' not in locks:
+        cap = ceilings(hw, planned)['comp_pct'][0]
+        if cap >= BY_KEY['comp_pct'].low:
+            put('comp_pct', min(planned['comp_pct'], math.floor(cap * 100) / 100), 'Shared RAM budget including all configured workers.')
+            planned.update(values)
+    # Never leave oversized current disk limits in an apparently successful Auto result.
+    budget = disk_budget(hw)
+    if budget is not None:
+        keys = [k for k in ('disk_gb', 'paint_disk_gb') if k in current and k not in locks]
+        fixed = sum(planned.get(k, 0) for k in ('disk_gb', 'paint_disk_gb') if k not in keys)
+        remaining = max(0., budget-fixed)
+        if keys and remaining >= len(keys):
+            if sum(planned[k] for k in keys) > remaining:
+                for key in keys:
+                    put(key, math.floor(remaining / len(keys) * 100) / 100, 'Shared disk allowance after reserve.')
+        planned.update(values)
+    # Validate each independent group against current peers, never against a
+    # failing group elsewhere. A rejected group is omitted, preserving its values.
+    blocked = {}
+    for group, keys in PROPOSAL_GROUPS.items():
+        peers = {k: planned[k] for k in keys if k in planned}
+        if not peers:
+            continue
+        if group == 'shape':
+            errors = [k for k, v in peers.items() if not isinstance(v, (int, float))
+                      or not math.isfinite(v) or not 0 <= v <= 100]
+        else:
+            errors = check_limits(peers, current, hw)
+        unknown = ((group == 'ram' and not ledger['known'])
+                   or (group == 'gpu' and not vram)
+                   or (group == 'disk' and budget is None))
+        if errors or unknown:
+            blocked[group] = blocked_message(group, hw)
+            for key in keys:
+                values.pop(key, None)
+                reasons.pop(key, None)
+    # A machine unable to fit even the base OS/processing reserves has no useful
+    # complete operating configuration, irrespective of its peripheral capacities.
+    if ledger['known'] and ledger['os_reserve'] + ledger['processing_reserve'] > ledger['ram']:
+        message = 'This computer cannot fit the minimum system memory reserves. Use a computer with more RAM.'
+        blocked = {g: message for g, keys in PROPOSAL_GROUPS.items() if any(k in current for k in keys)}
+        values = {}
+    if blocked:
+        reasons['blocked_groups'] = blocked
+    if not values:
+        reasons['blocked'] = 'No automatic changes are available. ' + (' '.join(blocked.values()) if blocked else 'Unlock a setting or choose another preset.')
     return values, reasons
 
 
